@@ -1,0 +1,6 @@
+data/
+roc.db*
+*.log
+*.tmp
+HANDOVER.md
+.DS_Store

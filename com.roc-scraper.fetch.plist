@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.roc-scraper.fetch</string>
+    <key>ProgramArguments</key>
+    <array>
+        <!-- keep the Mac awake for the run; a missed 06:00 (asleep) runs on wake -->
+        <string>/usr/bin/caffeinate</string>
+        <string>-i</string>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <!-- rebuild even if a state failed: fetch.py keeps that state's previous CSV -->
+        <string>cd /Users/parasarora/roc-scraper &amp;&amp; /usr/bin/python3 fetch.py; /usr/bin/python3 build_db.py</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+    <key>StandardOutPath</key><string>/Users/parasarora/roc-scraper/fetch.log</string>
+    <key>StandardErrorPath</key><string>/Users/parasarora/roc-scraper/fetch.log</string>
+</dict>
+</plist>
