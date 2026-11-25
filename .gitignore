@@ -4,3 +4,5 @@ roc.db*
 *.tmp
 HANDOVER.md
 .DS_Store
+.vercel
+.env*
