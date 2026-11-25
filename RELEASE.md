@@ -8,6 +8,7 @@ Status as of 2026-11-25. Works end to end on this Mac; **not yet releasable to o
   All 37 states and UTs once a week, about 490k records/day. Run by launchd at 06:00 (`com.roc-scraper.fetch`).
 - `build_db.py`: rebuilds `roc.db` (SQLite + full-text index) from `data/*.csv` after each fetch,
   carrying each record's "last updated" date over while its fields are unchanged.
+- `sync_turso.py`: hosted copy; pushes only changed companies into Turso.
 - `app.py` + `index.html`: search UI (name / CIN, state filter, typo tolerance), stdlib only.
 
 ## Verified
@@ -24,32 +25,33 @@ Status as of 2026-11-25. Works end to end on this Mac; **not yet releasable to o
 - [x] Attribution footer (GODL-India requires crediting the source).
 
 ## Blockers before other people use it
-- [ ] **Host it somewhere always-on.** Personal project, public site. Plan: Railway, one service from
-      the `Dockerfile` with a volume at `/data` and `DATAGOV_KEY` set; `REFRESH_AT=06:00` runs the
-      daily fetch in-process. First boot fetches all 37 states (~3 h) before search works.
-- [ ] **HTTPS + abuse limits.** Railway terminates HTTPS. Still no request rate limit in front of
-      Python's `http.server`; add one if traffic or scraping becomes a problem.
-- [x] **Supported Python.** The host image is `python:3.12-slim` (this Mac's 3.9 is only used for the local copy).
-- [x] **Version control.** Private GitHub repo (personal account). `data/`, `roc.db*`, `*.log` ignored;
-      the API key lives in `~/.datagov_key` locally and a Railway variable when hosted, never in the repo.
-- [ ] **Alert on failure.** A failed state is only written to `fetch.log`, and the old data stays live.
-      Add an alert on non-zero exit, plus a staleness check (any state with `checked_at` older than 8 days).
-- [ ] **Full coverage.** `fetch.py` now also fetches any state with no CSV yet, so the next run
-      (Mac or host) fills in the 23 missing states (~3 h).
-- [ ] **One fetcher only.** Once the host is verified, unload the Mac's launchd job so the same API
-      key isn't used twice a day.
+- [ ] **Hosting** (all free tiers): Vercel (UI + search API) + Turso, Mumbai (database) +
+      GitHub Actions (daily fetch, writes only changes). See README. Verify on the live URL.
+- [x] **Supported Python.** Vercel and GitHub Actions run Python 3.12.
+- [x] **Version control.** Private GitHub repo (personal account). Data, DB, logs ignored; keys only
+      in `~/.datagov_key` locally and as GitHub/Vercel secrets.
+- [x] **Alert on failure.** A failed daily run (any state) turns the GitHub Action red, which emails you.
+- [ ] **data.gov.in from GitHub's servers.** Unverified until the first Actions run.
+- [ ] **Full coverage.** 14 of 37 states uploaded. The Mac's 06:00 run on 26 Nov fetches the
+      other 23; then rebuild + re-upload once.
+- [ ] **One fetcher only.** After that, unload the Mac's launchd job.
+- [ ] **Cold starts.** First searches after Turso sits idle took 6-31 s (warm: 60-220 ms). Measure
+      on the live site; add a warm-up ping if it persists.
+- [ ] **Abuse limits.** No rate limit on the public API; Turso's free plan caps reads at 500M/month
+      (a search reads ~100-1,500 rows) and does not bill overages.
 
 ## Should fix
 - [ ] Browser QA: layout on desktop/phone, dark mode, keyboard-only use (only API-tested so far).
-- [ ] Rollback: `build_db.py` overwrites `roc.db`; keep the previous one as `roc.db.prev`.
+- [ ] Rollback: a bad sync can't be undone; Turso point-in-time restore on the free plan is limited.
 - [ ] Ranking: active companies don't rank above struck-off ones; first-letter typos aren't corrected.
 - [ ] Load test the hosted setup (concurrent users × typo-corrected searches).
-- [ ] Disk headroom: ~1.1 GB CSVs + ~1.6 GB DB at full size, double the DB during a rebuild.
+- [ ] Storage: ~1.6 GB of Turso's free 5 GB at full size.
+- [ ] GitHub Actions minutes (private repo: 2,000 free/month): ~30-45 min/day, so ~1,000-1,400.
 
 ## Rollback triggers (once hosted)
 - Searches slower than 1 s at p95, or any 5xx on `/api/search`.
 - A daily run ending with failed states two days running.
-- `roc.db` company count drops by more than 1% from the previous build.
+- Company count (meta) drops by more than 1% after a sync.
 
 ## First scheduled run (launchd kickstart, 2026-11-25)
 14:36 → 14:53 (17 min), exit code 0, no retries or timeouts.

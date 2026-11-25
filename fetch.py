@@ -2,7 +2,8 @@
 """Fetch today's states from data.gov.in RoC company master data into data/<state>.csv.
 
 Every state is on exactly one weekday, so each is refreshed once a week.
-Usage: fetch.py [state ...]   (no args = today's states + any never fetched)   |   fetch.py --test
+Usage: fetch.py [state ...]   (no args = today's states + any never fetched)
+       fetch.py --today         (today's states only, e.g. on a fresh CI machine)   |   fetch.py --test
 API key: $DATAGOV_KEY, else ~/.datagov_key.
 """
 import csv, datetime, json, os, re, sys, tempfile, time, urllib.parse, urllib.request
@@ -96,7 +97,9 @@ def main(args):
         return test()
     key = os.environ.get("DATAGOV_KEY") or open(os.path.expanduser("~/.datagov_key")).read().strip()
     # Missing states too: a fresh host (or a state that never succeeded) fills in without waiting a week.
-    states = args or DAYS[datetime.date.today().weekday()] + [s for s in STATES if not os.path.exists(csv_path(s))]
+    args = [a.strip().lower() for a in args if a.strip()]  # "Goa, west bengal" from the CI form
+    today = DAYS[datetime.date.today().weekday()]
+    states = today if args == ["--today"] else args or today + [s for s in STATES if not os.path.exists(csv_path(s))]
     states = list(dict.fromkeys(states))
     log(f"run start: {states}")
     failed = []

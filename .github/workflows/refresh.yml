@@ -1,0 +1,31 @@
+name: refresh
+on:
+  schedule:
+    - cron: "30 0 * * *"  # 06:00 IST daily; each state comes round once a week
+  workflow_dispatch:
+    inputs:
+      states:
+        description: "Comma-separated states to fetch (blank = today's)"
+        default: ""
+concurrency: refresh
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      DATAGOV_KEY: ${{ secrets.DATAGOV_KEY }}
+      TURSO_URL: ${{ secrets.TURSO_URL }}
+      TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
+      STATES: ${{ inputs.states }}
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Fetch from data.gov.in and sync changes to Turso
+        run: |
+          if [ -n "$STATES" ]; then IFS=, read -ra S <<< "$STATES"; else S=(--today); fi
+          python fetch.py "${S[@]}" || failed=1
+          # sync whatever was fetched; a failed state keeps its previous data live
+          if ls data/*.csv >/dev/null 2>&1; then python sync_turso.py || failed=1; fi
+          exit ${failed:-0}  # a red run => GitHub emails you

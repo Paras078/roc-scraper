@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Company search UI over roc.db.  Run: python3 app.py  ->  http://127.0.0.1:8000
 
-Env: PORT, HOST (default 127.0.0.1), DATA_DIR (where data/ and roc.db live),
-REFRESH_AT=HH:MM to run fetch.py + build_db.py daily in-process (hosts without launchd).
+Env: PORT, HOST (default 127.0.0.1), DATA_DIR (where roc.db lives).
+With TURSO_URL + TURSO_TOKEN set it queries Turso instead (how it runs on Vercel, via api/index.py).
 """
-import datetime, json, os, re, sqlite3, subprocess, sys, threading, time
+import functools, json, os, re, sqlite3, sys, time
+import turso
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -56,6 +57,13 @@ def closest(word, cands):
     return best and best[2]
 
 
+@functools.lru_cache(maxsize=20000)
+def count(word):
+    """Companies with a name word starting with word (a half-typed "relia" counts all of "reliance")."""
+    return query("SELECT coalesce(sum(n), 0) n FROM vocab WHERE term >= ? AND term < ?",
+                 (word, word + "\U0010ffff"))[0]["n"]
+
+
 def correct(word):
     """A similar word used by >=10x as many companies (likely what was meant), else word itself.
 
@@ -64,20 +72,20 @@ def correct(word):
     """
     if len(word) < 4:
         return word
-    # Count every word starting with it: a half-typed "relia" already matches all of "reliance".
-    n = query("SELECT coalesce(sum(n), 0) n FROM vocab WHERE term >= ? AND term < ?",
-              (word, word + "\U0010ffff"))[0]["n"]
+    n = count(word)
     if n >= 1000:  # already common
         return word
     # ponytail: only words with the same first letter and length ±2 are considered, so a typo
     # in the first letter isn't corrected. Upgrade path: trigram index over vocab.
     k = max_typos(word)
-    cands = query("SELECT term, n FROM vocab WHERE term >= ? AND term < ? AND length(term) BETWEEN ? AND ? "
-                  "AND n >= ?", (word[0], chr(ord(word[0]) + 1), len(word) - k, len(word) + k, 10 * max(n, 1)))
+    cands = query("SELECT term, n FROM fix WHERE c = ? AND l BETWEEN ? AND ? AND n >= ?",
+                  (word[0], len(word) - k, len(word) + k, 10 * max(n, 1)))
     return closest(word, [(c["term"], c["n"]) for c in cands]) or word
 
 
 def query(sql, args, max_seconds=None):
+    if os.environ.get("TURSO_URL"):
+        return turso.run([(sql, args)], timeout=10)[0]
     db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)  # fresh per request: picks up rebuilt DB
     db.row_factory = sqlite3.Row
     if max_seconds:  # abort runaway queries (raises sqlite3.OperationalError "interrupted")
@@ -89,10 +97,15 @@ def query(sql, args, max_seconds=None):
         db.close()
 
 
+BROAD = 500_000  # ranking every match costs ~1.5 us each: "india" (179k) 0.3 s, "private" (2.3M) 3.6 s
+
+
 def name_search(words, state):
     cols = ", ".join("c." + x for x in LIST_COLS.split(", "))
+    # When even the rarest word matches over BROAD companies, return 50 matches unranked (fast).
+    order = "ORDER BY rank" if min(count(w) for w in words) <= BROAD else ""
     return query(f"SELECT {cols} FROM names JOIN companies c ON c.rowid = names.rowid "
-                 "WHERE names MATCH ? AND (? = '' OR c.CompanyStateCode = ?) ORDER BY rank LIMIT 50",
+                 f"WHERE names MATCH ? AND (? = '' OR c.CompanyStateCode = ?) {order} LIMIT 50",
                  (fts_query(words), state, state), max_seconds=1.5)
 
 
@@ -134,23 +147,8 @@ def _search(q, state, corrected=None):
 
 
 def meta():
-    r = query("SELECT (SELECT count(*) FROM companies) n, (SELECT v FROM meta WHERE k='built') built", ())[0]
-    r["states"] = [x["s"] for x in query("SELECT DISTINCT CompanyStateCode s FROM companies ORDER BY 1", ())]
-    return r
-
-
-def refresh_daily(hhmm):
-    """Fetch + rebuild at hhmm local time every day; straight away on a fresh host (no roc.db yet)."""
-    def run():
-        subprocess.run(f"{sys.executable} fetch.py; {sys.executable} build_db.py", shell=True, cwd=HERE)
-    if not os.path.exists(DB):
-        run()  # fetch.py pulls every state that has no CSV yet (~3 h for all 37)
-    h, m = map(int, hhmm.split(":"))
-    while True:
-        now = datetime.datetime.now()
-        nxt = now.replace(hour=h, minute=m, second=0, microsecond=0)
-        time.sleep(((nxt if nxt > now else nxt + datetime.timedelta(days=1)) - now).total_seconds())
-        run()
+    m = {r["k"]: r["v"] for r in query("SELECT k, v FROM meta", ())}
+    return {"n": int(m["count"]), "built": m["built"], "states": json.loads(m["states"])}
 
 
 class H(BaseHTTPRequestHandler):
@@ -163,12 +161,13 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/search":
                 body = search(p.get("q", ""), p.get("state", ""))
             elif u.path == "/api/company":
-                body = (query("SELECT * FROM companies WHERE CIN = ?", (p.get("cin", ""),)) or [None])[0]
+                body = (query("SELECT c.*, k.at checked_at FROM companies c LEFT JOIN checked k "
+                              "ON k.state = c.CompanyStateCode WHERE c.CIN = ?", (p.get("cin", ""),)) or [None])[0]
             elif u.path == "/api/meta":
                 body = meta()
             else:
                 return self.send(404, b"not found", "text/plain")
-        except sqlite3.Error as e:
+        except (sqlite3.Error, RuntimeError, OSError) as e:
             return self.send(500, json.dumps({"error": str(e)}).encode(), "application/json")
         self.send(200, json.dumps(body).encode(), "application/json")
 
@@ -199,8 +198,6 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["--test"]:
         test()
     else:
-        if os.environ.get("REFRESH_AT"):
-            threading.Thread(target=refresh_daily, args=(os.environ["REFRESH_AT"],), daemon=True).start()
         host, port = os.environ.get("HOST", "127.0.0.1"), int(os.environ.get("PORT", 8000))
         print(f"http://{host}:{port}", flush=True)
         ThreadingHTTPServer((host, port), H).serve_forever()
