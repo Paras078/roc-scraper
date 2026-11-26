@@ -217,7 +217,7 @@ class H(BaseHTTPRequestHandler):
                 body["otp"] = ({"error": "Not sent: disposable email domain."} if c["disposable"] else
                                {"error": "Not sent: this domain can't receive email (no mail servers)."}
                                if not c["mx"] and not c["mx_error"] else
-                               verify.start(v, os.environ.get("PUBLIC_URL") or self.base_url()))
+                               verify.start(v, self.base_url()))
             elif self.path == "/api/verify/confirm":
                 body = verify.confirm(d.get("id", ""), d.get("code", ""))
             elif self.path == "/api/verify/status":
@@ -240,9 +240,13 @@ class H(BaseHTTPRequestHandler):
         return d if isinstance(d, dict) else None
 
     def base_url(self):
-        host = self.headers.get("Host", "")
-        local = host.startswith(("127.0.0.1", "localhost"))
-        return ("http://" if local else "https://") + host
+        """Where the emailed confirm link points. Never taken from the request on Vercel: a forged Host header would
+        send the customer's link (the secret) to another site, letting the agent confirm on the customer's behalf."""
+        if os.environ.get("PUBLIC_URL"):
+            return os.environ["PUBLIC_URL"]
+        if os.environ.get("VERCEL"):
+            raise RuntimeError("PUBLIC_URL isn't set on the server.")
+        return f"http://{self.server.server_address[0]}:{self.server.server_address[1]}"  # local run only
 
     def json(self, code, body):
         self.send(code, json.dumps(body).encode(), "application/json")
