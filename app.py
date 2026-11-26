@@ -4,14 +4,15 @@
 Env: PORT, HOST (default 127.0.0.1), DATA_DIR (where roc.db lives).
 With TURSO_URL + TURSO_TOKEN set it queries Turso instead (how it runs on Vercel, via api/index.py).
 """
-import functools, json, os, re, sqlite3, sys, time
-import turso
+import functools, hmac, json, os, re, sqlite3, sys, time
+import turso, verify
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(os.environ.get("DATA_DIR", HERE), "roc.db")
 PAGE = open(os.path.join(HERE, "index.html"), "rb").read()
+VERIFY_PAGE = open(os.path.join(HERE, "verify.html"), "rb").read()
 LIST_COLS = "CIN, CompanyName, CompanyStatus, CompanyStateCode, CompanyClass, CompanyRegistrationdate_date, updated_at"
 
 
@@ -156,8 +157,8 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         p = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:
-            if u.path == "/":
-                return self.send(200, PAGE, "text/html; charset=utf-8")
+            if u.path in ("/", "/verify"):
+                return self.send(200, PAGE if u.path == "/" else VERIFY_PAGE, "text/html; charset=utf-8")
             if u.path == "/api/search":
                 body = search(p.get("q", ""), p.get("state", ""))
             elif u.path == "/api/company":
@@ -170,6 +171,43 @@ class H(BaseHTTPRequestHandler):
         except (sqlite3.Error, RuntimeError, OSError) as e:
             return self.send(500, json.dumps({"error": str(e)}).encode(), "application/json")
         self.send(200, json.dumps(body).encode(), "application/json")
+
+    def do_POST(self):
+        """/api/verify/start {customer_id, name, company, email} -> checks + code sent;
+        /api/verify/confirm {id, code} -> verified?  Both need the X-Verify-Key header."""
+        key = os.environ.get("VERIFY_KEY", "")
+        if not key:
+            return self.json(503, {"error": "Verification isn't set up on this server (VERIFY_KEY missing)."})
+        if not hmac.compare_digest(self.headers.get("X-Verify-Key", "").encode(), key.encode()):
+            return self.json(401, {"error": "Wrong access key."})
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > 10_000:
+            return self.json(413, {"error": "Request too large."})
+        try:
+            d = json.loads(self.rfile.read(n) or b"{}")
+            assert isinstance(d, dict)
+        except (ValueError, AssertionError):
+            return self.json(400, {"error": "Body must be a JSON object."})
+        try:
+            if self.path == "/api/verify/start":
+                v, errors = verify.validate(d)
+                if errors:
+                    return self.json(422, {"errors": errors})
+                body = {"input": v, "checks": verify.checks(v, search)}
+                c = body["checks"]
+                body["otp"] = ({"error": "Not sent: disposable email domain."} if c["disposable"] else
+                               {"error": "Not sent: this domain can't receive email (no mail servers)."}
+                               if not c["mx"] and not c["mx_error"] else verify.start(v))
+            elif self.path == "/api/verify/confirm":
+                body = verify.confirm(d.get("id", ""), d.get("code", ""))
+            else:
+                return self.json(404, {"error": "not found"})
+        except (sqlite3.Error, RuntimeError, OSError) as e:
+            return self.json(500, {"error": str(e)})
+        self.json(200, body)
+
+    def json(self, code, body):
+        self.send(code, json.dumps(body).encode(), "application/json")
 
     def send(self, code, body, ctype):
         self.send_response(code)

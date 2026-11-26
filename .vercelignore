@@ -3,3 +3,4 @@ roc.db*
 *.log
 *.csv
 HANDOVER.md
+otp.db*

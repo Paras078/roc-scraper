@@ -6,3 +6,4 @@ HANDOVER.md
 .DS_Store
 .vercel
 .env*
+otp.db*

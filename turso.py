@@ -14,12 +14,12 @@ def _val(c):
     return int(c["value"]) if c["type"] == "integer" else c.get("value")
 
 
-def run(stmts, timeout=30, attempts=1):
+def run(stmts, timeout=30, attempts=1, url=None, token=None):
     """[(sql, args), ...] run in order on one connection -> list of [row dict, ...] per statement."""
-    url = os.environ["TURSO_URL"].replace("libsql://", "https://") + "/v2/pipeline"
+    url = (url or os.environ["TURSO_URL"]).replace("libsql://", "https://") + "/v2/pipeline"
     body = json.dumps({"requests": [{"type": "execute", "stmt": {"sql": s, "args": [_arg(a) for a in args]}}
                                     for s, args in stmts] + [{"type": "close"}]}).encode()
-    req = urllib.request.Request(url, body, {"Authorization": "Bearer " + os.environ["TURSO_TOKEN"],
+    req = urllib.request.Request(url, body, {"Authorization": "Bearer " + (token or os.environ["TURSO_TOKEN"]),
                                              "Content-Type": "application/json"})
     for attempt in range(attempts):
         try:
