@@ -25,20 +25,20 @@ Status as of 2026-11-25. Works end to end on this Mac; **not yet releasable to o
 - [x] Attribution footer (GODL-India requires crediting the source).
 
 ## Blockers before other people use it
-- [ ] **Hosting** (all free tiers): Vercel (UI + search API) + Turso, Mumbai (database) +
-      GitHub Actions (daily fetch, writes only changes). See README. Verify on the live URL.
-- [x] **Supported Python.** Vercel and GitHub Actions run Python 3.12.
-- [x] **Version control.** Private GitHub repo (personal account). Data, DB, logs ignored; keys only
-      in `~/.datagov_key` locally and as GitHub/Vercel secrets.
-- [x] **Alert on failure.** A failed daily run (any state) turns the GitHub Action red, which emails you.
-- [ ] **data.gov.in from GitHub's servers.** Unverified until the first Actions run.
-- [ ] **Full coverage.** 14 of 37 states uploaded. The Mac's 06:00 run on 26 Nov fetches the
-      other 23; then rebuild + re-upload once.
-- [ ] **One fetcher only.** After that, unload the Mac's launchd job.
-- [ ] **Cold starts.** First searches after Turso sits idle took 6-31 s (warm: 60-220 ms). Measure
-      on the live site; add a warm-up ping if it persists.
-- [ ] **Abuse limits.** No rate limit on the public API; Turso's free plan caps reads at 500M/month
-      (a search reads ~100-1,500 rows) and does not bill overages.
+- [x] **Hosting** (free tiers): Vercel (UI + API, Mumbai) + Turso `mca` (Mumbai). Live at
+      https://roc-scraper.vercel.app with all 37 states (3,738,718 companies, 26 Nov).
+- [x] **Daily refresh reaches the live site.** Mac launchd: fetch -> sync_turso -> build_db. Tested
+      end to end in a bare environment (Lakshadweep, 26 Nov).
+- [x] **Missed days catch up.** Any state not fetched for >8 days is fetched on the next run.
+- [x] **Supported Python** on Vercel (3.12). The Mac job still uses the system 3.9.
+- [x] **Version control.** Public GitHub repo (personal account); no secrets in history (checked).
+- [ ] **Single point of failure: the Mac.** Runs only while it's on (06:00, or on wake). data.gov.in
+      refuses GitHub's servers, so moving off the Mac needs an India-hosted machine (e.g. Oracle free, Mumbai).
+- [ ] **Alert on failure / staleness.** A failed run only shows in `fetch.log`. Add a check that warns when
+      any state's `checked.at` is older than 8 days.
+- [ ] **Cold reads.** First search in an untouched part of the data can take 1-5 s (was timing out at 10 s;
+      now 25 s allowed, and the whole DB is read once after each upload).
+- [ ] **Abuse limits.** No rate limit on the public API; Turso free caps reads at 500M/month, no overage billing.
 
 ## Should fix
 - [ ] Browser QA: layout on desktop/phone, dark mode, keyboard-only use (only API-tested so far).
@@ -46,12 +46,12 @@ Status as of 2026-11-25. Works end to end on this Mac; **not yet releasable to o
 - [ ] Ranking: active companies don't rank above struck-off ones; first-letter typos aren't corrected.
 - [ ] Load test the hosted setup (concurrent users × typo-corrected searches).
 - [ ] Storage: ~1.6 GB of Turso's free 5 GB at full size.
-- [ ] GitHub Actions minutes (private repo: 2,000 free/month): ~30-45 min/day, so ~1,000-1,400.
 
 ## Rollback triggers (once hosted)
 - Searches slower than 1 s at p95, or any 5xx on `/api/search`.
 - A daily run ending with failed states two days running.
 - Company count (meta) drops by more than 1% after a sync.
+- Typo-fix word list (`vocab`, `fix`) is only refreshed by a full rebuild + re-upload; do one monthly.
 
 ## First scheduled run (launchd kickstart, 2026-11-25)
 14:36 → 14:53 (17 min), exit code 0, no retries or timeouts.

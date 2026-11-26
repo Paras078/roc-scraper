@@ -15,14 +15,16 @@ from data.gov.in (Government Open Data License – India). Python stdlib only.
 Self-checks: `python3 fetch.py --test`, `build_db.py --test`, `app.py --test`.
 
 ## Hosting (free tiers): Vercel + Turso + GitHub Actions
-- **Turso** (Mumbai) holds the database: the same SQLite schema `build_db.py` produces, uploaded once
-  with `turso db create roc --from-file roc.db` (WAL mode).
-- **GitHub Actions** (`.github/workflows/refresh.yml`) runs daily at 06:00 IST: `fetch.py --today`, then
-  `sync_turso.py`, which writes only new/changed/removed companies (free plan: 10M writes/month).
-  Run it by hand from the Actions tab, optionally with a list of states. A failed run emails you.
-  Secrets: `DATAGOV_KEY`, `TURSO_URL`, `TURSO_TOKEN` (read-write).
+- **Turso** (Mumbai, database `mca`) holds the same SQLite schema `build_db.py` produces, uploaded with
+  `turso db create mca --from-file roc.db` (WAL mode). After an upload, read every table once
+  (`SELECT count(*)`): first reads of a fresh upload are slow (>10 s).
+- **The daily refresh runs on a Mac** (`com.roc-scraper.fetch.plist`, launchd, 06:00 or on wake):
+  `fetch.py` (today's states + any overdue >8 days), `sync_turso.py` (pushes only state files newer than
+  Turso's copy, writing only new/changed/removed companies), then `build_db.py` (local copy).
+  Needs `~/.datagov_key`, `~/.turso_mca_rw`, and `SSL_CERT_FILE` behind an HTTPS-inspecting proxy.
+  data.gov.in refuses GitHub's servers, so `.github/workflows/refresh.yml` is manual-only, kept for a
+  runner hosted in India.
 - **Vercel** serves `index.html` and the search API (`api/index.py` -> `app.py`).
   Env: `TURSO_URL`, `TURSO_TOKEN` (read-only). Every push to `main` redeploys.
 
 The typo-correction word list (`vocab`, `fix`) is only refreshed by a full rebuild + re-upload.
-`com.roc-scraper.fetch.plist` is the launchd job for running everything on a Mac instead.
