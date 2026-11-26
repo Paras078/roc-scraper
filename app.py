@@ -147,6 +147,12 @@ def _search(q, state, corrected=None):
     return {"results": hits, "corrected": corrected}
 
 
+def companies(cins):
+    """MCA rows for a list of CINs (from a company website)."""
+    return query(f"SELECT CIN, CompanyName, CompanyStatus FROM companies WHERE CIN IN ({', '.join('?' * len(cins))})",
+                 tuple(cins))
+
+
 def meta():
     m = {r["k"]: r["v"] for r in query("SELECT k, v FROM meta", ())}
     return {"n": int(m["count"]), "built": m["built"], "states": json.loads(m["states"])}
@@ -157,6 +163,9 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         p = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:
+            if u.path.startswith("/c/"):  # the customer's confirm link from the email
+                self.extra = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex"}
+                return self.send(200, verify.CONFIRM_PAGE, "text/html; charset=utf-8")
             if u.path in ("/", "/verify"):
                 return self.send(200, PAGE if u.path == "/" else VERIFY_PAGE, "text/html; charset=utf-8")
             if u.path == "/api/search":
@@ -172,39 +181,68 @@ class H(BaseHTTPRequestHandler):
             return self.send(500, json.dumps({"error": str(e)}).encode(), "application/json")
         self.send(200, json.dumps(body).encode(), "application/json")
 
+    def client_ip(self):
+        """The caller's address: Vercel puts it in x-real-ip / x-forwarded-for (and overwrites any sent by the client)."""
+        if os.environ.get("VERCEL"):
+            return (self.headers.get("x-real-ip") or self.headers.get("x-forwarded-for", "").split(",")[0]).strip()
+        return self.client_address[0]
+
     def do_POST(self):
-        """/api/verify/start {customer_id, name, company, email} -> checks + code sent;
-        /api/verify/confirm {id, code} -> verified?  Both need the X-Verify-Key header."""
+        """/api/verify/start {customer_id, name, company, email} -> checks + code and link emailed;
+        /api/verify/confirm {id, code} and /api/verify/status {id} -> verified?  These need the X-Verify-Key header.
+        /api/verify/click {link} is the customer tapping Confirm on the emailed link (the link token is the secret)."""
+        if self.path == "/api/verify/click":
+            d = self.body()
+            if d is None:
+                return self.json(400, {"error": "Body must be a JSON object."})
+            try:
+                return self.json(200, verify.click(d.get("link", ""), self.client_ip()))
+            except (sqlite3.Error, RuntimeError, OSError) as e:
+                return self.json(500, {"ok": False, "error": str(e)})
         key = os.environ.get("VERIFY_KEY", "")
         if not key:
             return self.json(503, {"error": "Verification isn't set up on this server (VERIFY_KEY missing)."})
         if not hmac.compare_digest(self.headers.get("X-Verify-Key", "").encode(), key.encode()):
             return self.json(401, {"error": "Wrong access key."})
-        n = int(self.headers.get("Content-Length") or 0)
-        if n > 10_000:
-            return self.json(413, {"error": "Request too large."})
-        try:
-            d = json.loads(self.rfile.read(n) or b"{}")
-            assert isinstance(d, dict)
-        except (ValueError, AssertionError):
-            return self.json(400, {"error": "Body must be a JSON object."})
+        d = self.body()
+        if d is None:
+            return self.json(400, {"error": "Body must be a JSON object (at most 10 kB)."})
         try:
             if self.path == "/api/verify/start":
                 v, errors = verify.validate(d)
                 if errors:
                     return self.json(422, {"errors": errors})
-                body = {"input": v, "checks": verify.checks(v, search)}
+                body = {"input": v, "checks": verify.checks(v, search, companies)}
                 c = body["checks"]
                 body["otp"] = ({"error": "Not sent: disposable email domain."} if c["disposable"] else
                                {"error": "Not sent: this domain can't receive email (no mail servers)."}
-                               if not c["mx"] and not c["mx_error"] else verify.start(v))
+                               if not c["mx"] and not c["mx_error"] else
+                               verify.start(v, os.environ.get("PUBLIC_URL") or self.base_url()))
             elif self.path == "/api/verify/confirm":
                 body = verify.confirm(d.get("id", ""), d.get("code", ""))
+            elif self.path == "/api/verify/status":
+                body = verify.status(d.get("id", ""))
             else:
                 return self.json(404, {"error": "not found"})
         except (sqlite3.Error, RuntimeError, OSError) as e:
             return self.json(500, {"error": str(e)})
         self.json(200, body)
+
+    def body(self):
+        """The request's JSON object, or None if it isn't one (or is over 10 kB)."""
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > 10_000:
+            return None
+        try:
+            d = json.loads(self.rfile.read(n) or b"{}")
+        except ValueError:
+            return None
+        return d if isinstance(d, dict) else None
+
+    def base_url(self):
+        host = self.headers.get("Host", "")
+        local = host.startswith(("127.0.0.1", "localhost"))
+        return ("http://" if local else "https://") + host
 
     def json(self, code, body):
         self.send(code, json.dumps(body).encode(), "application/json")
@@ -213,6 +251,8 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        for k, val in getattr(self, "extra", {}).items():
+            self.send_header(k, val)
         self.end_headers()
         self.wfile.write(body)
 

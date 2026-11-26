@@ -216,12 +216,24 @@ function render(res) {
         ex ? `${ex.CompanyName} · ${ex.CIN} · ${ex.CompanyStateCode.replace(/\b\w/g, c => c.toUpperCase())}`
            : m.similar.length ? "Closest: " + m.similar.map(r => `${r.CompanyName} (${r.CompanyStatus || "?"})`).join("; ")
            : "No registered company with that name.");
+  const w = c.website;
+  if (w) {
+    const names = w.companies.map(r => r.CompanyName ? `${r.CompanyName} (${r.CIN})` : r.CIN).join("; ");
+    check(l2, "Company website",
+          { confirmed: ["ok", "CIN matches"], other: ["mid", "Different CIN"], none: ["", "No CIN shown"],
+            unreachable: ["", "Couldn't read"] }[w.verdict],
+          { confirmed: `${w.url} shows this company's registration number: ${names}.`,
+            other: `${w.url} shows another company's registration number: ${names}. Could be a group company; check it.`,
+            none: `${w.url} doesn't show a CIN on its main pages. Common, so not a red flag.`,
+            unreachable: `Couldn't read ${w.url} (down, or it blocks automated visits). Not a red flag.` }[w.verdict]);
+  }
 
   const s3 = sec("One-time code"); s3.id = "otp";
   out.append(s3);
   if (res.otp.error) { s3.append(el("p", "msg bad", res.otp.error)); s3.append(resendBtn(v)); return; }
   current = { id: res.otp.id, input: v };
-  s3.append(el("p", "muted", `A 6-digit code was sent to ${v.email}. Ask the customer to read it out.`));
+  s3.append(el("p", "muted", `A 6-digit code and a confirm link were sent to ${v.email}. Ask the customer to read out the code, ` +
+                              "or, if they're at the office, to open the link on the office Wi-Fi and tap Confirm."));
   const row = el("form", "otp-row"); row.style.padding = "12px 0 0";
   const code = el("input"); code.id = "code"; Object.assign(code, { inputMode: "numeric", maxLength: 6, autocomplete: "one-time-code", placeholder: "000000" });
   code.setAttribute("aria-label", "Code from the customer");
@@ -236,6 +248,11 @@ function render(res) {
     clock.textContent = s ? `Expires in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` : "Code expired. Send a new one.";
     if (!s) clearInterval(timer); };
   tick(); timer = setInterval(tick, 1000);
+  const myId = current.id, poll = setInterval(async () => {
+    if (!current || current.id !== myId || Date.now() > until) return clearInterval(poll);
+    const r = await api("/api/verify/status", { id: myId }).catch(() => ({}));
+    if (r.verified) { clearInterval(poll); showDone(s3, r); }
+  }, 4000);
   row.addEventListener("submit", async e => {
     e.preventDefault();
     if (!/^[0-9]{6}$/.test(code.value)) { msg.className = "msg bad"; msg.textContent = "The code is 6 digits."; return; }
@@ -243,10 +260,7 @@ function render(res) {
     const r = await api("/api/verify/confirm", { id: current.id, code: code.value }).catch(() => ({ error: "Network error." }));
     ok.disabled = false;
     if (r.verified) {
-      clearInterval(timer);
-      const d = el("div", "done"), t = el("div");
-      t.append(el("strong", null, "Work email verified"), el("span", null, `Customer ${r.customer_id} · ${r.email} · ${r.at}`));
-      d.append(t); s3.replaceChildren(el("h3", null, "One-time code"), d);
+      showDone(s3, await api("/api/verify/status", { id: current.id }).catch(() => r));
     } else {
       msg.className = "msg bad";
       msg.textContent = (r.error || "Couldn't verify.") + (r.attempts_left ? ` ${r.attempts_left} attempt${r.attempts_left > 1 ? "s" : ""} left.` : "");
@@ -254,6 +268,26 @@ function render(res) {
     }
   });
   code.focus();
+}
+
+function showDone(s3, r) {
+  if (s3.dataset.done) return;
+  s3.dataset.done = "1"; clearInterval(timer);
+  const d = el("div", "done"), t = el("div");
+  t.append(el("strong", null, "Work email verified"),
+           el("span", null, `Customer ${r.customer_id} · ${r.email} · ${r.via === "link" ? "confirmed by link" : "code entered"}`));
+  d.append(t); s3.replaceChildren(el("h3", null, "Verification"), d);
+  const n = r.network;
+  if (r.via === "link" && n) {
+    const l = el("ul", "checks"); l.style.marginTop = "14px";
+    check(l, "Office network",
+          n.match ? ["ok", "Company network"] : n.error ? ["", "Couldn't check"] : n.ip_kind ? ["", "Private network"] : ["mid", "Not the company's"],
+          n.match ? `Confirmed from a network registered to: ${n.owner}.`
+          : n.error ? "Network lookup failed: " + n.error
+          : n.ip_kind ? "Confirmed from a private network (testing)."
+          : `Confirmed from ${n.owner || n.network}. Home broadband and mobile data look like this, so it's not proof either way.`);
+    s3.append(l);
+  }
 }
 
 function resendBtn(v) {

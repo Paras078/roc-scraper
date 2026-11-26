@@ -36,7 +36,8 @@ The page shows:
 - whether the domain is **disposable** (from [disposable-email-domains](https://github.com/disposable-email-domains/disposable-email-domains), vendored as `disposable.txt`), **personal** (Gmail and similar), and able to **receive mail** (an MX lookup over DNS-over-HTTPS)
 - the **name ↔ email** match: strong, partial, none, or shared address (`hr@`, `info@` …)
 - the **company ↔ domain** match (a heuristic) and whether the company is in the **MCA records** (with its status)
-- and it emails the customer a **6-digit code**, which they read back to the agent
+- the **company website** check: the email domain's site is read for a CIN or LLPIN (companies must print theirs, under Companies Act s.12). The CIN is matched against the entered company, even when it's outdated because the company converted from private to public. Results are *confirmed*, *different CIN* (often a group company), *no CIN shown* or *couldn't read*; the last two are not red flags.
+- and it emails the customer a **6-digit code** (they read it back) **plus a confirm link**. Tapping Confirm also verifies, and records who owns the customer's network (from the internet registry, via RDAP). A company leased line usually carries the company's name; home broadband and mobile data (Jio, Airtel …) don't count either way. The agent's page updates on its own.
 
 How codes are handled:
 - They're stored only as HMAC hashes, in a separate Turso DB (`mca-otp`), so the site's token for the company data stays read-only.
@@ -49,6 +50,9 @@ How codes are handled:
 | `VERIFY_KEY` | agents' access key (local copy: `~/.mca_verify_key`) |
 | `OTP_TURSO_URL`, `OTP_TURSO_TOKEN` | the `mca-otp` DB (token: `~/.turso_mca_otp`) |
 | `BREVO_KEY`, `OTP_FROM` | Brevo API key and the verified sender address the code comes from |
+
+Brevo: turn **off** IP blocking (Security → Authorised IPs), because Vercel sends from changing addresses.
+The website fetcher only follows https links on the email's own domain, and refuses names that resolve to private addresses.
 
 Locally, without `BREVO_KEY`, the code is printed to the server log, and codes go to `otp.db`.
 Self-test: `python3 verify.py`. Refresh the disposable list now and then by re-downloading `disposable_email_blocklist.conf` over `disposable.txt`.
