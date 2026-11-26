@@ -1,7 +1,7 @@
 name: refresh
+# Manual only: data.gov.in refuses connections from GitHub's servers (tested 2026-11-25), so the
+# daily refresh runs on the Mac (launchd: fetch.py, then sync_turso.py). Kept for an India-hosted runner.
 on:
-  schedule:
-    - cron: "30 0 * * *"  # 06:00 IST daily; each state comes round once a week
   workflow_dispatch:
     inputs:
       states:

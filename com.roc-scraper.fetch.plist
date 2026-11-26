@@ -10,9 +10,16 @@
         <string>-i</string>
         <string>/bin/sh</string>
         <string>-c</string>
-        <!-- rebuild even if a state failed: fetch.py keeps that state's previous CSV -->
-        <string>cd /Users/parasarora/roc-scraper &amp;&amp; /usr/bin/python3 fetch.py; /usr/bin/python3 build_db.py</string>
+        <!-- fetch today's + overdue states; push what's new to Turso (the live site); rebuild the local copy.
+             Each step runs even if the one before failed: failed states keep their previous data. -->
+        <string>cd /Users/parasarora/roc-scraper; /usr/bin/python3 fetch.py; TURSO_TOKEN="$(cat /Users/parasarora/.turso_mca_rw)" /usr/bin/python3 sync_turso.py; /usr/bin/python3 build_db.py</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>TURSO_URL</key><string>libsql://mca-paras078.aws-ap-south-1.turso.io</string>
+        <!-- system roots + the office proxy's CA (Netskope re-signs HTTPS); harmless off that network -->
+        <key>SSL_CERT_FILE</key><string>/Users/parasarora/.ca-bundle-with-proxy.pem</string>
+    </dict>
     <key>StartCalendarInterval</key>
     <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
     <key>StandardOutPath</key><string>/Users/parasarora/roc-scraper/fetch.log</string>

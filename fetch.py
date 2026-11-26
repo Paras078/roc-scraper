@@ -2,7 +2,7 @@
 """Fetch today's states from data.gov.in RoC company master data into data/<state>.csv.
 
 Every state is on exactly one weekday, so each is refreshed once a week.
-Usage: fetch.py [state ...]   (no args = today's states + any never fetched)
+Usage: fetch.py [state ...]   (no args = today's states + any not fetched in STALE_DAYS, e.g. Mac was off)
        fetch.py --today         (today's states only, e.g. on a fresh CI machine)   |   fetch.py --test
 API key: $DATAGOV_KEY, else ~/.datagov_key.
 """
@@ -28,6 +28,7 @@ DAYS = [  # Monday .. Sunday
     ["gujarat", "telangana", "assam", "jammu & kashmir"],
 ]
 STATES = [s for day in DAYS for s in day]
+STALE_DAYS = 8  # a state is due weekly; older than this means its day was missed
 
 
 def log(msg):
@@ -36,6 +37,12 @@ def log(msg):
 
 def csv_path(state):
     return os.path.join(DATA, re.sub(r"\W+", "_", state) + ".csv")
+
+
+def stale(state, now=None):
+    """Never fetched, or last good fetch older than STALE_DAYS (the file is only replaced on success)."""
+    p = csv_path(state)
+    return not os.path.exists(p) or (now or time.time()) - os.path.getmtime(p) > STALE_DAYS * 86400
 
 
 def get(key, state, offset):
@@ -89,6 +96,11 @@ def test():
     assert len(STATES) == 37 and len(set(STATES)) == 37 and len(DAYS) == 7
     assert csv_path("tamil nadu").endswith("/tamil_nadu.csv")  # matches the seeded file names
     assert csv_path("jammu & kashmir").endswith("/jammu_kashmir.csv")
+    global DATA
+    DATA, real = tempfile.mkdtemp(), DATA
+    open(csv_path("goa"), "w").close()
+    assert not stale("goa") and stale("goa", time.time() + 9 * 86400) and stale("delhi")  # fresh, overdue, missing
+    DATA = real
     print("ok")
 
 
@@ -96,10 +108,10 @@ def main(args):
     if args == ["--test"]:
         return test()
     key = os.environ.get("DATAGOV_KEY") or open(os.path.expanduser("~/.datagov_key")).read().strip()
-    # Missing states too: a fresh host (or a state that never succeeded) fills in without waiting a week.
+    # Overdue states too: a missed day (Mac off/asleep) is caught up next run, not a week later.
     args = [a.strip().lower() for a in args if a.strip()]  # "Goa, west bengal" from the CI form
     today = DAYS[datetime.date.today().weekday()]
-    states = today if args == ["--today"] else args or today + [s for s in STATES if not os.path.exists(csv_path(s))]
+    states = today if args == ["--today"] else args or today + [s for s in STATES if stale(s)]
     states = list(dict.fromkeys(states))
     log(f"run start: {states}")
     failed = []

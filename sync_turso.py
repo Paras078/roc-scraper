@@ -4,11 +4,12 @@
 Per state: new or changed companies are upserted with updated_at = this run (triggers keep the
 name index in step), companies gone from the source are deleted, checked.at = this run.
 Unchanged companies cost a read, not a write, which keeps us inside Turso's free write quota.
-Usage: sync_turso.py [csv ...]   (default: every data/*.csv)   Env: TURSO_URL, TURSO_TOKEN
+Usage: sync_turso.py [csv ...]   (default: every data/*.csv newer than what Turso last got for that state,
+       so a failed sync is retried next run)   Env: TURSO_URL, TURSO_TOKEN
 """
-import glob, json, os, sys, time
+import csv, glob, os, sys, time
 import turso
-from build_db import COLS, DIR, rows_of
+from build_db import COLS, DIR, rows_of, run_time
 
 CHUNK = 200  # statements per HTTP request
 
@@ -60,9 +61,24 @@ def sync(path):
     log(f"{state}: {len(rows)} companies, {len(changed) - new} changed, {new} new, {len(gone)} removed")
 
 
+def pending():
+    """CSVs fetched after Turso's checked.at for their state (or for a state Turso lacks)."""
+    got = {r["state"]: r["at"] for r in run([("SELECT state, at FROM checked", ())])[0]}
+    out = []
+    for p in sorted(glob.glob(os.path.join(DIR, "data", "*.csv"))):
+        with open(p, newline="", encoding="utf-8", errors="replace") as fh:
+            first = next(csv.DictReader(fh), None)
+        state = first and first.get("CompanyStateCode")
+        if state and run_time(p) > got.get(state, ""):
+            out.append(p)
+    return out
+
+
 def main(paths):
     failed = []
-    for p in paths or sorted(glob.glob(os.path.join(DIR, "data", "*.csv"))):
+    paths = paths or pending()
+    log(f"sync start: {len(paths)} state file(s) to push")
+    for p in paths:
         try:
             sync(p)
         except Exception as e:
