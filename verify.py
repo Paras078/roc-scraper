@@ -4,7 +4,7 @@ Env: VERIFY_KEY (agents' access key, also keys the OTP hashes), BREVO_KEY + OTP_
 OTP_TURSO_URL + OTP_TURSO_TOKEN (OTP store; a local otp.db when unset).
 Without BREVO_KEY, off Vercel, the code is printed to the server log instead (local testing).
 """
-import difflib, hashlib, hmac, json, os, re, secrets, sqlite3, sys, time, urllib.parse, urllib.request
+import difflib, hashlib, hmac, json, os, re, secrets, sqlite3, sys, time, urllib.error, urllib.parse, urllib.request
 import turso
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -150,16 +150,20 @@ def code_hash(otp_id, code):
 def send_email(to, code):
     text = (f"Your verification code is {code}\n\nIt expires in {OTP_TTL // 60} minutes. Share it only with the "
             "agent verifying your work email. If you didn't expect this, ignore this email.")
-    if not os.environ.get("BREVO_KEY"):
+    missing = [k for k in ("BREVO_KEY", "OTP_FROM") if not os.environ.get(k)]
+    if missing:
         if os.environ.get("VERCEL"):
-            raise RuntimeError("Email sending isn't set up yet (BREVO_KEY missing).")
+            raise RuntimeError(f"Email sending isn't set up yet ({' and '.join(missing)} missing).")
         print(f"[dev] OTP for {to}: {code}", file=sys.stderr, flush=True)
         return
     body = json.dumps({"sender": {"name": "MCA Data", "email": os.environ["OTP_FROM"]}, "to": [{"email": to}],
                        "subject": f"{code} is your verification code", "textContent": text}).encode()
     req = urllib.request.Request("https://api.brevo.com/v3/smtp/email", body,
                                  {"api-key": os.environ["BREVO_KEY"], "Content-Type": "application/json"})
-    urllib.request.urlopen(req, timeout=15).close()
+    try:
+        urllib.request.urlopen(req, timeout=15).close()
+    except urllib.error.HTTPError as e:  # Brevo explains itself, e.g. "sender not valid", "account under validation"
+        raise RuntimeError(f"Brevo refused it ({e.code}): {e.read().decode(errors='replace')[:200]}") from None
 
 
 def start(v):
