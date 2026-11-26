@@ -85,7 +85,7 @@ def correct(word):
 
 def query(sql, args, max_seconds=None):
     if os.environ.get("TURSO_URL"):
-        return turso.run([(sql, args)], timeout=10)[0]
+        return turso.run([(sql, args)], timeout=25)[0]  # a cold first read can take >10 s
     db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)  # fresh per request: picks up rebuilt DB
     db.row_factory = sqlite3.Row
     if max_seconds:  # abort runaway queries (raises sqlite3.OperationalError "interrupted")
